@@ -3869,8 +3869,8 @@ let _lastGoodKeychainLabel = null;
 // Read the macOS keychain credentials, label-memoized + short-TTL cached (F5). Sync (execFileSync);
 // returns the `claudeAiOauth` creds object or null.
 function readKeychainCreds() {
-  // `security` is macOS-only; elsewhere claude keeps its credentials in ~/.claude/.credentials.json.
-  if (process.platform !== "darwin") return null;
+  // win32 has no `security`; claude keeps its credentials in ~/.claude/.credentials.json there.
+  if (process.platform === "win32") return null;
   return _keychainCache.get(() => {
     for (const label of orderLabelsLastGoodFirst(KEYCHAIN_LABELS, _lastGoodKeychainLabel)) {
       try {

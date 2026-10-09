@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- **OCP runs natively on Windows, on the default `-p` path (#529).** Not endpoint-touching: no request handler changes. Tested on Windows 11 with Node 24 and the native-installer `claude.exe`.
+  - Home paths come from `os.homedir()`, because native Windows shells and services usually leave `HOME` unset.
+  - Isolated spawns also set `USERPROFILE` on win32. `claude.exe` reads its config dir from `USERPROFILE` and ignores `HOME`, so without this an "isolated" spawn loaded the operator's real `~/.claude`.
+  - `killChildTree` runs `taskkill /PID <pid> /T /F` on win32, so grandchildren holding the stdout pipe are reaped (the #474 shape). `SIGBREAK` triggers graceful shutdown; `claude` spawns pass `windowsHide`.
+  - The keychain lookup (`security`) is skipped on win32, POSIX mode tightening is skipped on win32, and `sanitizeError` also redacts drive-letter and UNC paths. On Linux and macOS these are unchanged.
+  - **`CLAUDE_TUI_MODE=true` is refused at boot on win32**, since TUI mode needs `tmux` and `/bin/sh` hooks.
+  - `setup.mjs` works on Windows: the `claude` probes no longer redirect to `/dev/null`, `where claude` picks the `.exe`, and a `start_ocp.cmd` launcher replaces `start.sh`. No auto-start is installed on Windows, so setup no longer waits for a health check.
+  - Not included: Windows auto-start, and ports of the bash `ocp` / `ocp-connect` CLIs. README § "Quickstart → Windows".
+
 ### Fixed
 
 - **`/logs`, and so `ocp logs`, read a file the installed service never writes, and answered `500` (#514).** `setup.mjs` points launchd's `StandardOutPath` and systemd's `StandardOutput=append:` at `~/.ocp/logs/proxy.log`; `handleLogs` read `~/.openclaw/logs/proxy.log`. It now reads the service's file first and falls back to the old path **only when the first does not exist**, so a host whose log is still there keeps working and a stale legacy file cannot shadow the live one. Any other failure on the service's file (say a permissions error) is reported as it is rather than read past, and when neither file exists the `500` has the same `{ "error": "Cannot read log: ..." }` body, now naming `~/.ocp/logs/proxy.log`.

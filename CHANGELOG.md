@@ -8,7 +8,8 @@
   - Home paths come from `os.homedir()`, because native Windows shells and services usually leave `HOME` unset.
   - Isolated spawns also set `USERPROFILE` on win32. `claude.exe` reads its config dir from `USERPROFILE` and ignores `HOME`, so without this an "isolated" spawn loaded the operator's real `~/.claude`.
   - `killChildTree` runs `taskkill /PID <pid> /T /F` on win32, so grandchildren holding the stdout pipe are reaped (the #474 shape). `SIGBREAK` triggers graceful shutdown; `claude` spawns pass `windowsHide`.
-  - The keychain lookup (`security`) is skipped on win32, POSIX mode tightening is skipped on win32, and `sanitizeError` also redacts drive-letter and UNC paths. On Linux and macOS these are unchanged.
+  - The keychain lookup (`security`) and POSIX mode tightening are skipped on win32; on Linux and macOS both are unchanged.
+  - `sanitizeError` also redacts drive-letter (`C:\…`, `C:/…`) and UNC (`\\server\share\…`) paths in client-visible error messages, **on every platform**, so the suite pins the patterns on Linux CI. POSIX paths are redacted exactly as before; what changes on Linux and macOS is that non-path text shaped like those (`x:\y`, `c:/tmp`, `\\name\…`) also becomes `[path]`. Two backslashes followed by text without a third one (an escaped regex such as `"\\d{3}"`) is not taken for a UNC path.
   - **`CLAUDE_TUI_MODE=true` is refused at boot on win32**, since TUI mode needs `tmux` and `/bin/sh` hooks.
   - `setup.mjs` works on Windows: the `claude` probes no longer redirect to `/dev/null`, `where claude` picks the `.exe`, and a `start_ocp.cmd` launcher replaces `start.sh`. No auto-start is installed on Windows, so setup no longer waits for a health check.
   - Not included: Windows auto-start, and ports of the bash `ocp` / `ocp-connect` CLIs. README § "Quickstart → Windows".

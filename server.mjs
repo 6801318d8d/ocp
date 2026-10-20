@@ -3424,10 +3424,14 @@ async function callClaudeStreaming(model, messages, conversationId, res, authInf
 
 // Strip absolute filesystem paths from an error message before sending it to a client.
 // claude error_message / stderr routinely embed home-dir / credential-file paths. (issue #111)
+// The two win32 patterns are not gated on win32, so the suite pins them on every platform (#529).
+// On POSIX they also rewrite text that only looks like a path: `X:\…`, `X:/…` or `\\name\…`.
+// A UNC match needs `\\name\` (a name, then a third backslash), so a JSON-escaped backslash
+// such as `"\\d{3}"` or `a\\b` is not taken for a share.
 function sanitizeError(msg) {
   return String(msg || "Internal error")
     .replace(/(?<![A-Za-z])[A-Za-z]:[\\/][^\s"'<>|]*/g, "[path]") // win32 drive paths
-    .replace(/\\\\[^\s"'<>|]+/g, "[path]")                         // win32 UNC paths
+    .replace(/\\\\[^\s\\"'<>|]+\\[^\s"'<>|]*/g, "[path]")          // win32 UNC paths
     .replace(/\/[\w/.\-]+/g, "[path]");
 }
 

@@ -1,6 +1,6 @@
 # ADR 0023 — `OCP_ALLOWED_ORIGIN_SCHEMES`: admitting browser-extension origins by scheme
 
-- **Status**: Proposed
+- **Status**: Accepted (maintainer sign-off 2026-10-21)
 - **Date**: 2026-09-30
 - **Amends**: [ADR 0019](0019-inbound-origin-gate.md) (the inbound `Origin` gate), [ADR 0020](0020-declared-hosts.md) (declared hosts)
 - **Class**: Hybrid, for the reason ADR 0020 gives — the gate runs before routing, so it sits above Class A, B.1 and B.2 alike. ADR 0006 route (b): a **semantics change** on grandfathered B.2 endpoints, so it carries its own authorization rather than the grandfather clause.
@@ -26,7 +26,7 @@ The gate answers `403 forbidden_origin` with reason `foreign-origin` — correct
 
 Add `OCP_ALLOWED_ORIGIN_SCHEMES` — a comma-separated list of origin **schemes** the operator declares — and admit any origin of a declared scheme.
 
-1. **A new admitting arm in `evaluateOriginGate`**, after the no-origin and GET/HEAD exemptions and before the declared-host, private and same-origin arms. A match is admitted with reason **`declared-scheme`**, distinct from `declared-origin`, so a log line says which setting let a request in.
+1. **A new admitting arm in `evaluateOriginGate`**, after the no-origin and GET/HEAD exemptions and before the declared-host, private and same-origin arms. A match is admitted with reason **`declared-scheme`**, distinct from `declared-origin`, so the gate's verdict says which setting admitted a request. The reason is not written to the log on admission: the gate's reason is logged only for a rejection (`origin_rejected`), so the boot output (item 7) is how an operator sees that a scheme is declared.
 2. **The comparison is on `new URL(origin).protocol`**, never on the origin string: `https://moz-extension.example` does not match `moz-extension`. An opaque (`null`) or unparseable origin never matches.
 3. **`http` and `https` are refused as entries**, reported at boot and dropped. Declaring either would admit every web page and undo ADR 0019 entirely; there is no deployment that needs it, because a web origin is admitted by being private-range, same-origin or declared as a host.
 4. **Parsing mirrors ADR 0020's rules where they apply**: split on comma only, entries trimmed, case folded, duplicates collapsed. A trailing `:` or `://` is accepted, so a value pasted from the address bar (`moz-extension://`) works. Anything that is not an RFC 3986 scheme (`ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`) is reported at boot and dropped — not fatal, for ADR 0020 §7's reason.
@@ -57,7 +57,7 @@ Add `OCP_ALLOWED_ORIGIN_SCHEMES` — a comma-separated list of origin **schemes*
 ## Evidence
 
 - Unit tests in `test-features.mjs`: parsing keeps `moz-extension` / `chrome-extension` and reports `http`, `https://` and a non-scheme; the gate admits any id of a declared scheme with reason `declared-scheme`, refuses the same origin without the declaration (control), and refuses another scheme, a web page, `null`, and a web host whose name contains the scheme. Removing the new gate line turns the admission test red.
-- A live-server test (`OCP_ALLOWED_ORIGIN_SCHEMES (live)`, contributed in the #528 review) boots `server.mjs` with `OCP_ALLOWED_ORIGIN_SCHEMES=moz-extension` and requires a `moz-extension://…` `DELETE /cache` to get `200` with its origin echoed in `Access-Control-Allow-Origin`, while a `chrome-extension://…` origin and a web origin on the same instance get `403`. The unit tests cannot see `server.mjs` stop passing the declaration to the gate; this one can. Mutations, each applied to a copy of the tree, Linux (Node 24), `--only OCP_ALLOWED_ORIGIN_SCHEMES` (3 tests, all green unmutated):
+- A live-server test (`OCP_ALLOWED_ORIGIN_SCHEMES (live)`, contributed in the #528 review) boots `server.mjs` with `OCP_ALLOWED_ORIGIN_SCHEMES=moz-extension` and requires a `moz-extension://…` `DELETE /cache` to get `200` with its origin echoed in `Access-Control-Allow-Origin`, while a `chrome-extension://…` origin and a web origin on the same instance get `403`. The unit tests cannot see `server.mjs` stop passing the declaration to the gate; this one can. Mutations, each applied to a copy of the tree, Linux (Node 24), `--only OCP_ALLOWED_ORIGIN_SCHEMES` (3 tests at the time, all green unmutated):
 
   | mutation | red |
   |---|---|
@@ -66,6 +66,14 @@ Add `OCP_ALLOWED_ORIGIN_SCHEMES` — a comma-separated list of origin **schemes*
   | parse `undefined` instead of `process.env.OCP_ALLOWED_ORIGIN_SCHEMES` | live test (status `403`) |
   | control: delete the `declared-scheme` arm in `evaluateOriginGate` | live test and the unit gate test |
 
+- Two more live tests, added after an independent review of #528 (a fresh-context Claude Sonnet 5.5 reviewer, not the author of any of this) found two claims above that no test pinned. `OCP_ALLOWED_ORIGIN_SCHEMES (live): declaring a scheme does not widen the CORS echo to any other origin` boots with `moz-extension` declared and requires `GET /health` from a web origin and from a `chrome-extension://…` origin to carry the fallback `Access-Control-Allow-Origin` instead of their own origin (GET is exempt from the gate, so the echo is the only barrier there), with the declared origin's echo on the same path as its control. `OCP_ALLOWED_ORIGIN_SCHEMES (live): unset, a moz-extension origin is refused and not echoed` boots with the variable removed from the child's environment and requires a `moz-extension://…` `DELETE /cache` to get `403` and no echo, with a `DELETE /cache` carrying no `Origin` as its control. Mutations, macOS (Node v26.8.1), `--only OCP_ALLOWED_ORIGIN_SCHEMES` (5 tests, all green unmutated, and still 5 of 5 with the variable exported in the shell):
+
+  | mutation | red |
+  |---|---|
+  | the CORS line echoes whenever any scheme is declared (`ALLOWED_ORIGIN_SCHEMES.schemes.length > 0` in place of the `matchesDeclaredScheme(...)` arm) | the CORS-echo test only |
+  | parse a fixed `"moz-extension"` in place of the environment variable | the unset test only |
+
+  On this tree the earlier rows still hold: dropping `declaredSchemes:` reddens the first live test only; parsing `undefined` reddens it and the CORS-echo test, whose control (the declared origin's echo) fails; deleting the CORS arm reddens the same two.
 - Existing ADR 0019 / ADR 0020 tests pass unchanged.
 - Live, on Windows: with `OCP_ALLOWED_ORIGIN_SCHEMES=moz-extension`, a POST from an arbitrary `moz-extension://…` origin returned `200` with that origin echoed in `Access-Control-Allow-Origin`; `Origin: https://evil.example` still returned `403`.
 - `scripts/b2-key-snapshot.mjs` on Linux (Node 24): "B.2 response key sets match the snapshot (2 profiles)", so no response key path changes.

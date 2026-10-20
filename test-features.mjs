@@ -19,7 +19,7 @@ import { createSerialMutex, createTtlCache, isTokenExpiring, orderLabelsLastGood
 import { makeResolveSpawnToken } from "./lib/spawn-token.mjs";
 import { scheduleKillEscalation, makeKillEscalation } from "./lib/child-tree.mjs";
 import { EventEmitter } from "node:events";
-import { parseAuthority, isRebindSafe, matchesDeclared, parseAllowedHosts, evaluateOriginGate } from "./lib/host-gate.mjs";
+import { parseAuthority, isRebindSafe, matchesDeclared, parseAllowedHosts, evaluateOriginGate, parseAllowedOriginSchemes, matchesDeclaredScheme } from "./lib/host-gate.mjs";
 import { createHash } from "node:crypto";
 import { strict as assert } from "node:assert";
 import { join } from "node:path";
@@ -32252,6 +32252,86 @@ ltTest("ADR 0020: a DECLARED host is admitted as an Origin outright — the Host
   } finally { child.kill("SIGKILL"); _ltRmRetry(dir); }
 });
 
+ltTest("OCP_ALLOWED_ORIGIN_SCHEMES (live): the env var reaches the gate AND the CORS echo, and only for the declared scheme", async () => {
+  if (!LT_POSIX) return;
+  // The unit tests below call evaluateOriginGate()/matchesDeclaredScheme() directly, so they cannot see
+  // server.mjs stop PASSING the parsed schemes to them (mutation: drop `declaredSchemes:` from the gate call,
+  // drop the `||` arm of the CORS line, or parse `undefined` instead of the env var — all three stay green
+  // without this test). Same shape as the ADR 0020 declared-host test, for the same reason.
+  const dir = ltMkdir(); const fake = ltFake(dir);
+  const { child, buf, port } = await ltBootFresh(
+    { CLAUDE_BIN: fake, OCP_ALLOWED_ORIGIN_SCHEMES: "moz-extension" }, dir);
+  try {
+    assert.ok(await ltWait(() => buf.out.includes("listening on") || buf.exit != null), `server did not start: ${buf.err.slice(0, 200)}`);
+    const id = "moz-extension://aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const ext = await lt19Send(port, { method: "DELETE", path: "/cache", origin: id });
+    assert.equal(ext.status, 200, `a declared-scheme origin must be admitted by the LIVE gate; got ${ext.status}`);
+    assert.match(ext.raw, /access-control-allow-origin: moz-extension:\/\/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/i,
+      `the admitted origin must be echoed, or the browser discards the answer; got headers: ${ext.raw.slice(0, 400)}`);
+    // Controls on the SAME instance, same shape, differing only in the scheme: the gate is on, and the
+    // declaration is what admitted the first request.
+    const other = await lt19Send(port, { method: "DELETE", path: "/cache", origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop" });
+    assert.equal(other.status, 403, `an undeclared extension scheme must stay refused; got ${other.status}`);
+    const evil = await lt19Send(port, { method: "DELETE", path: "/cache", origin: LT19_EVIL });
+    assert.equal(evil.status, 403, `a web origin must stay refused; got ${evil.status}`);
+  } finally { child.kill("SIGKILL"); _ltRmRetry(dir); }
+});
+
+// The Access-Control-Allow-Origin value a raw response carries, or null when it has none. A REFUSED
+// request carries one too: the header is set before the gate runs, and `http://127.0.0.1:<port>` is the
+// "this origin is not allowed" value. Returning null (not "") for absent keeps an absent header from
+// comparing equal to anything an assertion expects.
+const ltAcao = (r) => { const m = r.raw.match(/^access-control-allow-origin: (.*?)\r?$/im); return m ? m[1] : null; };
+
+ltTest("OCP_ALLOWED_ORIGIN_SCHEMES (live): declaring a scheme does not widen the CORS echo to any other origin", async () => {
+  if (!LT_POSIX) return;
+  // The test above pins that the declared scheme IS echoed; nothing pinned that ONLY it is. The echo is
+  // the one barrier on GET, which the gate exempts (ADR 0019): were the CORS line to follow "some scheme
+  // is declared" instead of "THIS origin's scheme is declared", every web page could read GET responses.
+  // Mutation: replace the `matchesDeclaredScheme(...)` arm of the CORS `isAllowedOrigin` line with
+  // `ALLOWED_ORIGIN_SCHEMES.schemes.length > 0` — the test above and every unit test stay green.
+  const dir = ltMkdir(); const fake = ltFake(dir);
+  const { child, buf, port } = await ltBootFresh(
+    { CLAUDE_BIN: fake, OCP_ALLOWED_ORIGIN_SCHEMES: "moz-extension" }, dir);
+  try {
+    assert.ok(await ltWait(() => buf.out.includes("listening on") || buf.exit != null), `server did not start: ${buf.err.slice(0, 200)}`);
+    const id = "moz-extension://aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const fallback = `http://127.0.0.1:${port}`;
+    // Control first, on the same path as the refusals: the header IS observable here, and the declared
+    // origin gets its own value back. Without it a missing header would read as "not widened".
+    const ext = await lt19Send(port, { method: "GET", path: "/health", origin: id });
+    assert.equal(ltAcao(ext), id, `the declared origin must be echoed on GET; got ${ltAcao(ext)}`);
+    const web = await lt19Send(port, { method: "GET", path: "/health", origin: LT19_EVIL });
+    assert.equal(ltAcao(web), fallback, `a web origin must NOT be echoed because some scheme is declared; got ${ltAcao(web)}`);
+    const other = await lt19Send(port, { method: "GET", path: "/health", origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop" });
+    assert.equal(ltAcao(other), fallback, `an undeclared extension scheme must NOT be echoed; got ${ltAcao(other)}`);
+  } finally { child.kill("SIGKILL"); _ltRmRetry(dir); }
+});
+
+ltTest("OCP_ALLOWED_ORIGIN_SCHEMES (live): unset, a moz-extension origin is refused and not echoed", async () => {
+  if (!LT_POSIX) return;
+  // "Unset means nothing changes" is the claim that lets this ship without re-opening ADR 0019, and the
+  // unit tests cover it only for the library's `[]` default. Mutation: parse a fixed "moz-extension" in
+  // place of `process.env.OCP_ALLOWED_ORIGIN_SCHEMES` — the live test above stays green (it sets exactly
+  // that value) and so does every unit test.
+  // `undefined` removes the key from the child's environment even when the operator's own shell exports
+  // it: ltBoot spreads process.env, so merely not passing it would not make it unset.
+  const dir = ltMkdir(); const fake = ltFake(dir);
+  const { child, buf, port } = await ltBootFresh(
+    { CLAUDE_BIN: fake, OCP_ALLOWED_ORIGIN_SCHEMES: undefined }, dir);
+  try {
+    assert.ok(await ltWait(() => buf.out.includes("listening on") || buf.exit != null), `server did not start: ${buf.err.slice(0, 200)}`);
+    const id = "moz-extension://aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    // Control: the route executes on this instance, so the refusal below is the gate and not a broken server.
+    const bare = await lt19Send(port, { method: "DELETE", path: "/cache" });
+    assert.equal(bare.status, 200, `DELETE /cache with no Origin must execute on this instance; got ${bare.status}`);
+    const ext = await lt19Send(port, { method: "DELETE", path: "/cache", origin: id });
+    assert.equal(ext.status, 403, `with the variable unset a moz-extension origin must be refused; got ${ext.status}`);
+    assert.match(ext.raw, /forbidden_origin/, "the refusal must be machine-identifiable, not a bare 403");
+    assert.equal(ltAcao(ext), `http://127.0.0.1:${port}`, `with the variable unset the origin must not be echoed; got ${ltAcao(ext)}`);
+  } finally { child.kill("SIGKILL"); _ltRmRetry(dir); }
+});
+
 ltTest("ADR 0020: an unparseable OCP_ALLOWED_HOSTS entry is REPORTED at boot, not silently dropped", async () => {
   if (!LT_POSIX) return;
   // A token that did not parse is a name the operator BELIEVES they declared. Dropping it in
@@ -32407,6 +32487,32 @@ test("ADR 0020: a declared entry naming a default port is flagged, and the flag 
     ["a.example.com:443", "b.example.com:80", "c.example.com:8443", "d.example.com:"],
     "and the entry is kept EXACTLY as written — dropping the port would widen it to any port, " +
     "which the operator did not ask for");
+});
+
+test("OCP_ALLOWED_ORIGIN_SCHEMES: parsing keeps extension schemes and refuses http/https", () => {
+  const r = parseAllowedOriginSchemes("moz-extension, chrome-extension://, MOZ-EXTENSION:, http, https://, not a scheme");
+  assert.deepEqual(r.schemes, ["moz-extension", "chrome-extension"],
+    "trailing :// and : are tolerated, case folds, duplicates collapse");
+  assert.deepEqual(r.invalid, ["http", "https://", "not a scheme"],
+    "http/https would admit every web page, so they are refused and reported, never silently kept");
+  assert.deepEqual(parseAllowedOriginSchemes(undefined), { schemes: [], invalid: [] });
+});
+
+test("OCP_ALLOWED_ORIGIN_SCHEMES: a declared scheme admits every origin of that scheme, and nothing else", () => {
+  const g = (origin, declaredSchemes) =>
+    evaluateOriginGate({ origin, hostHeader: "127.0.0.1:3456", method: "POST", declaredHosts: [], isPrivateOrigin: false, declaredSchemes });
+  const ext = ["moz-extension"];
+  assert.deepEqual(g("moz-extension://aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", ext), { allow: true, reason: "declared-scheme" });
+  assert.deepEqual(g("moz-extension://00000000-0000-0000-0000-000000000000", ext), { allow: true, reason: "declared-scheme" });
+  // Control: without the declaration the same origin is the foreign-origin refusal it was.
+  assert.deepEqual(g("moz-extension://aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", []), { allow: false, reason: "foreign-origin" });
+  // A different scheme, a web page, and an opaque origin stay refused.
+  assert.equal(g("chrome-extension://abcdefghijklmnopabcdefghijklmnop", ext).allow, false);
+  assert.equal(g("https://evil.example", ext).allow, false);
+  assert.equal(g("null", ext).allow, false);
+  assert.equal(matchesDeclaredScheme("moz-extension://x", ext), true);
+  assert.equal(matchesDeclaredScheme("https://moz-extension.example", ext), false,
+    "the scheme is compared, not a substring of the origin");
 });
 
 test("ADR 0020: the gate's verdict and its REASON across the whole matrix", () => {

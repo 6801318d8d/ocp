@@ -32162,6 +32162,31 @@ ltTest("ADR 0020: a DECLARED host is admitted as an Origin outright — the Host
   } finally { child.kill("SIGKILL"); _ltRmRetry(dir); }
 });
 
+ltTest("OCP_ALLOWED_ORIGIN_SCHEMES (live): the env var reaches the gate AND the CORS echo, and only for the declared scheme", async () => {
+  if (!LT_POSIX) return;
+  // The unit tests below call evaluateOriginGate()/matchesDeclaredScheme() directly, so they cannot see
+  // server.mjs stop PASSING the parsed schemes to them (mutation: drop `declaredSchemes:` from the gate call,
+  // drop the `||` arm of the CORS line, or parse `undefined` instead of the env var — all three stay green
+  // without this test). Same shape as the ADR 0020 declared-host test, for the same reason.
+  const dir = ltMkdir(); const fake = ltFake(dir);
+  const { child, buf, port } = await ltBootFresh(
+    { CLAUDE_BIN: fake, OCP_ALLOWED_ORIGIN_SCHEMES: "moz-extension" }, dir);
+  try {
+    assert.ok(await ltWait(() => buf.out.includes("listening on") || buf.exit != null), `server did not start: ${buf.err.slice(0, 200)}`);
+    const id = "moz-extension://aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const ext = await lt19Send(port, { method: "DELETE", path: "/cache", origin: id });
+    assert.equal(ext.status, 200, `a declared-scheme origin must be admitted by the LIVE gate; got ${ext.status}`);
+    assert.match(ext.raw, /access-control-allow-origin: moz-extension:\/\/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/i,
+      `the admitted origin must be echoed, or the browser discards the answer; got headers: ${ext.raw.slice(0, 400)}`);
+    // Controls on the SAME instance, same shape, differing only in the scheme: the gate is on, and the
+    // declaration is what admitted the first request.
+    const other = await lt19Send(port, { method: "DELETE", path: "/cache", origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop" });
+    assert.equal(other.status, 403, `an undeclared extension scheme must stay refused; got ${other.status}`);
+    const evil = await lt19Send(port, { method: "DELETE", path: "/cache", origin: LT19_EVIL });
+    assert.equal(evil.status, 403, `a web origin must stay refused; got ${evil.status}`);
+  } finally { child.kill("SIGKILL"); _ltRmRetry(dir); }
+});
+
 ltTest("ADR 0020: an unparseable OCP_ALLOWED_HOSTS entry is REPORTED at boot, not silently dropped", async () => {
   if (!LT_POSIX) return;
   // A token that did not parse is a name the operator BELIEVES they declared. Dropping it in

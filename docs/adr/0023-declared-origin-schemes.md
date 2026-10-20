@@ -40,11 +40,11 @@ Add `OCP_ALLOWED_ORIGIN_SCHEMES` — a comma-separated list of origin **schemes*
 
 - **Class A** — unaffected, for ADR 0020's reason: the gate is reached only when `Origin` is present, and neither `cli.js` nor OCP's outbound call to `api.anthropic.com` sends one.
 - **Class B.1** — OpenAI's specification defines request and response fields, not transport-level access control for a self-hosted server. No field is added, removed or retyped.
-- **Class B.2** — a **semantics change**: with the variable set, a POST from a declared-scheme origin that previously received `403` now executes, and receives its own origin in `Access-Control-Allow-Origin`. That needs its own authorization (ADR 0006 route (b)), which is this ADR. Not ADR 0012: no field is added. No response key path changes; `scripts/b2-key-snapshot.mjs` is expected to report no difference (see Evidence).
+- **Class B.2** — a **semantics change**: with the variable set, a POST from a declared-scheme origin that previously received `403` now executes, and receives its own origin in `Access-Control-Allow-Origin`. That needs its own authorization (ADR 0006 route (b)), which is this ADR. Not ADR 0012: no field is added. No response key path changes; `scripts/b2-key-snapshot.mjs` reports no difference (see Evidence).
 
 ## Consequences
 
-**Trust widens to every extension of the declared scheme.** `moz-extension` admits every extension installed in every Firefox profile of that user, not only the one the operator meant. With the default `ALLOWED_TOOLS` (`Bash`, `Write`, `Edit`, …) any of them can drive tool execution on the host — the exposure ADR 0019 measured, now reachable by installed extension code instead of by web pages. That is an operator opt-in with a smaller population than "the web" (extensions are installed deliberately and reviewed by the browser vendors), but it is the operator's call, and the README says so next to the variable. An operator who wants one extension declares its id in `OCP_ALLOWED_HOSTS` instead.
+**Trust widens to every extension of the declared scheme.** `moz-extension` admits every extension installed in every Firefox profile of that user, not only the one the operator meant. With the default `ALLOWED_TOOLS` (`Bash`, `Write`, `Edit`, …) any of them can drive tool execution on the host — the exposure ADR 0019 measured, now reachable by installed extension code instead of by web pages. That is an operator opt-in with a smaller population than "the web", on the assumption that the operator knows which extensions that browser runs. The assumption is weaker than it looks: store listings are reviewed by the browser vendors, but sideloaded and enterprise-pushed extensions are not, and a policy-installed extension can be added without the user's action. It is the operator's call, and the README says so next to the variable. An operator who wants one extension declares its id in `OCP_ALLOWED_HOSTS` instead.
 
 **Not affected**: every deployment that does not set the variable; `curl`, the OpenAI SDKs and `ocp-connect` (no `Origin`); every origin already admitted by ADR 0019/0020.
 
@@ -57,6 +57,15 @@ Add `OCP_ALLOWED_ORIGIN_SCHEMES` — a comma-separated list of origin **schemes*
 ## Evidence
 
 - Unit tests in `test-features.mjs`: parsing keeps `moz-extension` / `chrome-extension` and reports `http`, `https://` and a non-scheme; the gate admits any id of a declared scheme with reason `declared-scheme`, refuses the same origin without the declaration (control), and refuses another scheme, a web page, `null`, and a web host whose name contains the scheme. Removing the new gate line turns the admission test red.
+- A live-server test (`OCP_ALLOWED_ORIGIN_SCHEMES (live)`, contributed in the #528 review) boots `server.mjs` with `OCP_ALLOWED_ORIGIN_SCHEMES=moz-extension` and requires a `moz-extension://…` `DELETE /cache` to get `200` with its origin echoed in `Access-Control-Allow-Origin`, while a `chrome-extension://…` origin and a web origin on the same instance get `403`. The unit tests cannot see `server.mjs` stop passing the declaration to the gate; this one can. Mutations, each applied to a copy of the tree, Linux (Node 24), `--only OCP_ALLOWED_ORIGIN_SCHEMES` (3 tests, all green unmutated):
+
+  | mutation | red |
+  |---|---|
+  | drop `declaredSchemes:` from the gate call in `handleRequest` | live test (status `403`) |
+  | drop the `matchesDeclaredScheme(...)` arm of the CORS `isAllowedOrigin` line | live test (ACAO not echoed) |
+  | parse `undefined` instead of `process.env.OCP_ALLOWED_ORIGIN_SCHEMES` | live test (status `403`) |
+  | control: delete the `declared-scheme` arm in `evaluateOriginGate` | live test and the unit gate test |
+
 - Existing ADR 0019 / ADR 0020 tests pass unchanged.
 - Live, on Windows: with `OCP_ALLOWED_ORIGIN_SCHEMES=moz-extension`, a POST from an arbitrary `moz-extension://…` origin returned `200` with that origin echoed in `Access-Control-Allow-Origin`; `Origin: https://evil.example` still returned `403`.
-- **Not yet run:** `scripts/b2-key-snapshot.mjs`, whose fixture is a `/bin/sh` fake `claude` and cannot run on the Windows host this was developed on; CI (`ubuntu-latest`) runs it via `npm test`.
+- `scripts/b2-key-snapshot.mjs` on Linux (Node 24): "B.2 response key sets match the snapshot (2 profiles)", so no response key path changes.

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- **`OCP_ALLOWED_ORIGIN_SCHEMES`: admit browser extensions by origin scheme (#528).** A Firefox extension calls OCP from `moz-extension://<id>`, and that id changes per install and per profile, so declaring it in `OCP_ALLOWED_HOSTS` admits one install and the `403 forbidden_origin` comes back after a reinstall. The new variable (comma-separated, e.g. `moz-extension`, `chrome-extension`) admits every origin of a listed scheme through the inbound origin gate, logs the admission with reason `declared-scheme`, and echoes the origin in `Access-Control-Allow-Origin`; boot prints the admitted schemes. `http` and `https` are refused as entries, because they would admit every web page, and refused entries are reported at boot. **Declaring a scheme admits every extension of that scheme, and with the default `CLAUDE_ALLOWED_TOOLS` any of them can run tools on the host**; to admit one extension, keep declaring its id in `OCP_ALLOWED_HOSTS`. Unset (the default), nothing changes.
+  **Class Hybrid, [ADR 0023](docs/adr/0023-declared-origin-schemes.md) (Proposed), amending ADR 0019 and ADR 0020; ADR 0006 route (b).** A semantics change on the gate in front of every endpoint: with the variable set, a request from a declared-scheme origin that received `403` now executes. No field and no endpoint is added, and the B.2 key-set snapshot is unchanged.
+
 ### Fixed
 
 - **`/logs`, and so `ocp logs`, read a file the installed service never writes, and answered `500` (#514).** `setup.mjs` points launchd's `StandardOutPath` and systemd's `StandardOutput=append:` at `~/.ocp/logs/proxy.log`; `handleLogs` read `~/.openclaw/logs/proxy.log`. It now reads the service's file first and falls back to the old path **only when the first does not exist**, so a host whose log is still there keeps working and a stale legacy file cannot shadow the live one. Any other failure on the service's file (say a permissions error) is reported as it is rather than read past, and when neither file exists the `500` has the same `{ "error": "Cannot read log: ..." }` body, now naming `~/.ocp/logs/proxy.log`.

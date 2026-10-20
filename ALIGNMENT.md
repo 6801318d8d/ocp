@@ -137,13 +137,13 @@ ADR 0006 retroactively authorizes the B.2 endpoints listed in the inventory tabl
 
 > The citation above is anchored on a **grep-able marker**, not on a bare line number, because the bare line number is what rotted: this note cited `server.mjs` line 845–849 from before v3.16.4 until #292, and by then those lines were the `OCP_LOCAL_TOOLS` boot gate — a reviewer following the citation as instructed landed on unrelated code. The block had moved to 2374–2379, and even #292's own corrected range (2349–2354) was stale again by the time the fix was written. `// ALIGNMENT:` appears exactly once in `server.mjs` and marks this block deliberately, so it survives the drift a line number cannot. Line numbers in this document are always secondary to a named anchor, and are pinned to a stated version so that staleness is visible rather than silent.
 
-**Cross-cutting authorizations (ADR 0019, ADR 0020).** The table above maps each endpoint to the
-ADR that authorized *its existence*. Two authorizations are not endpoint-scoped and therefore have
-no row. Both govern the same gate at the top of `handleRequest`, which runs before `OPTIONS`,
-before auth and before routing; both change **semantics** for every endpoint in this table — a
-request that previously executed now receives `403` — which is why each is ADR 0006 route **(b)**
-and not the grandfather clause, and neither adds a field or an endpoint, so neither is filed under
-ADR 0012.
+**Cross-cutting authorizations (ADR 0019, ADR 0020, ADR 0023).** The table above maps each endpoint
+to the ADR that authorized *its existence*. Three authorizations are not endpoint-scoped and
+therefore have no row. All three govern the same gate at the top of `handleRequest`, which runs
+before `OPTIONS`, before auth and before routing; each changes **semantics** for every endpoint in
+this table — a request that previously executed now receives `403`, or one that previously received
+`403` now executes — which is why each is ADR 0006 route **(b)** and not the grandfather clause,
+and none adds a field or an endpoint, so none is filed under ADR 0012.
 
 - [ADR 0019](docs/adr/0019-inbound-origin-gate.md) refuses any request carrying a non-allowlisted
   `Origin` header on a method other than `GET`/`HEAD`. Its two admitting arms are the
@@ -159,12 +159,21 @@ ADR 0012.
   first — and is echoed into `Access-Control-Allow-Origin`, where it previously received the
   loopback default. That header change is the second semantics change and is why the ADR 0006
   route-(b) obligation applies twice over.
+- [ADR 0023](docs/adr/0023-declared-origin-schemes.md) adds a **fourth admitting arm**, off unless
+  the operator sets `OCP_ALLOWED_ORIGIN_SCHEMES`: an origin whose **scheme** is declared
+  (`moz-extension`, `chrome-extension`) is admitted outright with reason `declared-scheme`, and is
+  echoed into `Access-Control-Allow-Origin` as ADR 0020 does for a declared host. A Firefox
+  extension's origin carries a per-install id, so `OCP_ALLOWED_HOSTS` admits one install and stops
+  admitting it after a reinstall. `http` and `https` are refused as entries, because either would
+  admit every web page. This change runs in the **admitting** direction, the opposite of ADR 0019's:
+  a request that received `403` now executes, and it widens trust to every extension of the
+  declared scheme, which the ADR records as the operator's call.
 
 > Recorded here rather than only in the ADR because **this paragraph is what a reviewer reads when
 > CLAUDE.md tells them to "independently confirm the declared class against the `ALIGNMENT.md`
 > inventory table"**, and the next change to this gate will be classified against it. ADR 0019's
 > own PR (#443, `987bd83`) established that precedent by adding the paragraph above in the same
-> change; #448 follows it. An authorization recorded only in its ADR is the citation-rot the
+> change; #448 and #528 follow it. An authorization recorded only in its ADR is the citation-rot the
 > Hybrid note warns about, one level up.
 
 ### Class B citation requirement

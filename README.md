@@ -138,7 +138,7 @@ The full LAN server + client handbook, headless (Pi / NAS / VPS) OAuth, key/quot
 
 ### Windows
 
-OCP runs natively on Windows 10/11 for the default `-p` path. Run the same install from PowerShell:
+OCP runs natively on Windows 11 for the default `-p` path. Run the same install from PowerShell:
 
 ```powershell
 git clone https://github.com/dtzp555-max/ocp.git
